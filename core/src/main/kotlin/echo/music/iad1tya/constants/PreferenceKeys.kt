@@ -178,6 +178,12 @@ val CrossfadeGaplessKey = booleanPreferencesKey("crossfadeGapless")
 val AutomixCrossfadeKey = booleanPreferencesKey("automixCrossfade")
 val AutomixDebugOverlayKey = booleanPreferencesKey("automixDebugOverlay")
 
+val AutoDjEnabledKey = booleanPreferencesKey("auto_dj_enabled")
+val AutoDjPresetKey = stringPreferencesKey("auto_dj_preset")
+val AutoDjMaxTempoAdjustmentKey = floatPreferencesKey("auto_dj_max_tempo_adjustment")
+val AutoDjDebugKey = booleanPreferencesKey("auto_dj_debug")
+val AutoDjAutoRemixOrderingKey = booleanPreferencesKey("auto_dj_auto_remix_ordering")
+
 val MaxImageCacheSizeKey = intPreferencesKey("maxImageCacheSize")
 val MaxSongCacheSizeKey = intPreferencesKey("maxSongCacheSize")
 val ExportDirectoryUriKey = stringPreferencesKey("exportDirectoryUri")

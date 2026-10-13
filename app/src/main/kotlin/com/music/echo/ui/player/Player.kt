@@ -177,6 +177,8 @@ import echo.music.iad1tya.canvas.CanvasArtwork
 import echo.music.iad1tya.canvas.TidalCanvasProvider
 import echo.music.iad1tya.constants.AudioQuality
 import echo.music.iad1tya.constants.AudioQualityKey
+import echo.music.iad1tya.constants.AutoDjDebugKey
+import echo.music.iad1tya.playback.autodj.AutoDjTelemetryFormatter
 import echo.music.iad1tya.constants.CanvasThumbnailAnimationKey
 import echo.music.iad1tya.constants.CropAlbumArtKey
 import echo.music.iad1tya.constants.DarkModeKey
@@ -344,8 +346,11 @@ fun BottomSheetPlayer(
   val isCrossfading by playerConnection.isCrossfading.collectAsState()
   val isAutomixing by playerConnection.isAutomixing.collectAsState()
   val automixDebug by playerConnection.automixDebugInfo.collectAsState()
+  val telemetry by playerConnection.telemetryState.collectAsState()
   val automixDebugOverlayEnabled by
     rememberPreference(echo.music.iad1tya.constants.AutomixDebugOverlayKey, false)
+  val autoDjDebugOverlayEnabled by
+    rememberPreference(AutoDjDebugKey, false)
 
   var currentAudioFormat by remember { mutableStateOf<androidx.media3.common.Format?>(null) }
   DisposableEffect(playerConnection, isCrossfading) {
@@ -483,8 +488,8 @@ fun BottomSheetPlayer(
   var sliderPosition by remember { mutableStateOf<Long?>(null) }
 
   val automixDebugOverlay: @Composable () -> Unit = {
-    if (automixDebugOverlayEnabled) {
-      automixDebug?.let { dbg ->
+    if (automixDebugOverlayEnabled || autoDjDebugOverlayEnabled) {
+      if (automixDebug != null || telemetry.state != "Idle" || telemetry.isMixing) {
         val mono =
           MaterialTheme.typography.labelSmall.copy(
             fontSize = 9.sp,
@@ -494,31 +499,47 @@ fun BottomSheetPlayer(
           modifier =
             Modifier.padding(horizontal = PlayerHorizontalPadding, vertical = 4.dp)
               .clip(RoundedCornerShape(6.dp))
-              .background(Color.Black.copy(alpha = 0.45f))
+              .background(Color.Black.copy(alpha = 0.55f))
               .padding(6.dp)
         ) {
-          Text("AUTOMIX  ${dbg.status}", style = mono, color = Color.White)
+          val statusText = when {
+            telemetry.isMixing -> AutoDjTelemetryFormatter.format(telemetry.progress)
+            telemetry.isFallback -> AutoDjTelemetryFormatter.format(telemetry.fallbackReason, telemetry.confidence)
+            telemetry.state.isNotBlank() && telemetry.state != "Idle" -> "AUTO DJ  [${telemetry.state}]"
+            automixDebug != null -> "AUTOMIX  ${automixDebug?.status}"
+            else -> "AUTO DJ"
+          }
+          Text(statusText, style = mono, color = Color.White)
+
+          if (telemetry.outgoingCamelotKey != null && telemetry.incomingCamelotKey != null) {
+            val keyStr = AutoDjTelemetryFormatter.format(
+              telemetry.outgoingCamelotKey,
+              telemetry.incomingCamelotKey,
+              telemetry.stepDelta,
+            )
+            val scoreStr = telemetry.harmonicScore?.let { " (score %.2f)".format(it) } ?: ""
+            Text("Key: $keyStr$scoreStr", style = mono, color = Color(0xFF64B5F6))
+          } else {
+            Text("BPM: -- | Key: --", style = mono, color = Color.White.copy(alpha = 0.7f))
+          }
+
+          val outBpm = telemetry.outgoingBpm ?: automixDebug?.outBpm
+          val inBpm = telemetry.incomingBpm ?: automixDebug?.inBpm
+          val ratio = if (telemetry.tempoRatio != 1.0f) telemetry.tempoRatio else automixDebug?.tempoRatio
           Text(
-            "out: ${dbg.outBpm?.let { "%.1f bpm".format(it) } ?: "—"}" +
-              (dbg.outConfidence?.let { "  conf %.2f".format(it) } ?: "") +
-              (dbg.outMixOutMs?.takeIf { it > 0 }?.let { "  mixOut ${makeTimeString(it)}" } ?: ""),
+            "out: ${outBpm?.let { "%.1f bpm".format(it) } ?: "—"}  in: ${inBpm?.let { "%.1f bpm".format(it) } ?: "—"}" +
+              (ratio?.let { "  ratio ×%.3f".format(it) } ?: ""),
             style = mono,
             color = Color.White.copy(alpha = 0.85f)
           )
-          Text(
-            "in:  ${dbg.inBpm?.let { "%.1f bpm".format(it) } ?: "—"}" +
-              (dbg.inConfidence?.let { "  conf %.2f".format(it) } ?: "") +
-              (dbg.inMixInMs?.takeIf { it > 0 }?.let { "  mixIn ${makeTimeString(it)}" } ?: ""),
-            style = mono,
-            color = Color.White.copy(alpha = 0.85f)
-          )
-          if (dbg.triggerTimeMs != null) {
+
+          val triggerMs = automixDebug?.triggerTimeMs
+          if (triggerMs != null) {
             val remainingS =
-              ((dbg.triggerTimeMs - (sliderPosition ?: effectivePosition)) / 1000).coerceAtLeast(0)
+              ((triggerMs - (sliderPosition ?: effectivePosition)) / 1000).coerceAtLeast(0)
             Text(
-              "mix @ ${makeTimeString(dbg.triggerTimeMs)} (in ${remainingS}s)" +
-                (dbg.incomingStartMs?.let { "  from ${makeTimeString(it)}" } ?: "") +
-                (dbg.tempoRatio?.let { "  ×%.3f".format(it) } ?: ""),
+              "mix @ ${makeTimeString(triggerMs)} (in ${remainingS}s)" +
+                (automixDebug?.incomingStartMs?.let { "  from ${makeTimeString(it)}" } ?: ""),
               style = mono,
               color = Color.White.copy(alpha = 0.85f)
             )

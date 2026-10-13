@@ -43,6 +43,7 @@ import echo.music.iad1tya.db.entities.SongEntity
 import echo.music.iad1tya.db.entities.SongPlayStatsEntity
 import echo.music.iad1tya.db.entities.SortedSongAlbumMap
 import echo.music.iad1tya.db.entities.SortedSongArtistMap
+import echo.music.iad1tya.db.entities.TrackProfileEntity
 import echo.music.iad1tya.db.entities.SpeedDialItem
 import echo.music.iad1tya.db.entities.TasteProfileEntity
 import echo.music.iad1tya.extensions.toSQLiteQuery
@@ -66,6 +67,9 @@ class MusicDatabase(
 
   val tasteProfileDao: TasteProfileDao
     get() = delegate.tasteProfileDao
+
+  val trackProfileDao: TrackProfileDao
+    get() = delegate.trackProfileDao
 
   val openHelper: SupportSQLiteOpenHelper
     get() = delegate.openHelper
@@ -108,6 +112,7 @@ class MusicDatabase(
       SongPlayStatsEntity::class,
       RecommendationExclusionEntity::class,
       TasteProfileEntity::class,
+      TrackProfileEntity::class,
     ],
   views =
     [
@@ -115,7 +120,7 @@ class MusicDatabase(
       SortedSongAlbumMap::class,
       PlaylistSongMapPreview::class,
     ],
-  version = 48,
+  version = 49,
   exportSchema = true,
   autoMigrations =
     [
@@ -163,6 +168,7 @@ abstract class InternalDatabase : RoomDatabase() {
   abstract val songPlayStatsDao: SongPlayStatsDao
   abstract val recommendationExclusionDao: RecommendationExclusionDao
   abstract val tasteProfileDao: TasteProfileDao
+  abstract val trackProfileDao: TrackProfileDao
 
   companion object {
     const val DB_NAME = "song.db"
@@ -190,6 +196,7 @@ abstract class InternalDatabase : RoomDatabase() {
               MIGRATION_43_44,
               MIGRATION_44_45,
               MIGRATION_45_46,
+              MIGRATION_48_49,
             )
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .setTransactionExecutor(java.util.concurrent.Executors.newFixedThreadPool(4))
@@ -1139,3 +1146,66 @@ class Migration47To48Spec : AutoMigrationSpec {
     }
   }
 }
+
+val MIGRATION_48_49 =
+  object : Migration(48, 49) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `track_profile` (
+          `songId` TEXT NOT NULL,
+          `bpm` REAL NOT NULL,
+          `confidence` REAL NOT NULL,
+          `firstBeatOffsetMs` INTEGER NOT NULL,
+          `downbeatIntervalMs` INTEGER NOT NULL,
+          `phraseBeatCount` INTEGER NOT NULL,
+          `camelotKey` TEXT,
+          `pitchClass` INTEGER,
+          `isMinor` INTEGER,
+          `mixOutPointMs` INTEGER,
+          `mixInPointMs` INTEGER,
+          `analyzedAt` INTEGER NOT NULL,
+          PRIMARY KEY(`songId`)
+        )
+        """.trimIndent(),
+      )
+
+      try {
+        db.execSQL(
+          """
+          INSERT OR IGNORE INTO `track_profile` (
+            `songId`,
+            `bpm`,
+            `confidence`,
+            `firstBeatOffsetMs`,
+            `downbeatIntervalMs`,
+            `phraseBeatCount`,
+            `camelotKey`,
+            `pitchClass`,
+            `isMinor`,
+            `mixOutPointMs`,
+            `mixInPointMs`,
+            `analyzedAt`
+          )
+          SELECT
+            `songId`,
+            `bpm`,
+            `confidence`,
+            `firstBeatOffsetMs`,
+            CAST(CASE WHEN `bpm` > 0 THEN (240000.0 / `bpm`) ELSE 2000 END AS INTEGER),
+            32,
+            NULL,
+            `keyPitchClass`,
+            `keyIsMinor`,
+            `mixOutPointMs`,
+            `mixInPointMs`,
+            `analyzedAt`
+          FROM `beat_info`
+          """.trimIndent(),
+        )
+      } catch (e: Exception) {
+        Timber.tag("MIGRATION_48_49").w(e, "Migration from beat_info to track_profile encountered non-fatal issue")
+      }
+    }
+  }
+

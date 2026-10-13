@@ -52,6 +52,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Checkbox
+import echo.music.iad1tya.LocalDatabase
+import echo.music.domain.autodj.reorder.AutoRemixOrderingEngine
+import echo.music.iad1tya.db.entities.toDomain
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
@@ -282,6 +287,7 @@ fun Queue(
   }
 
   var locked by rememberPreference(QueueEditLockKey, defaultValue = false)
+  val database = LocalDatabase.current
 
   val (useNewPlayerDesign, onUseNewPlayerDesignChange) =
     rememberPreference(UseNewPlayerDesignKey, defaultValue = true)
@@ -1003,6 +1009,53 @@ fun Queue(
             val hasUpcomingSongs =
               currentWindowIndex != -1 && currentWindowIndex < queueWindows.lastIndex
             if (!locked && !isListenTogetherGuest && !inSelectMode && hasUpcomingSongs) {
+              TooltipBox(
+                positionProvider =
+                  TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                tooltip = { PlainTooltip { Text("Auto-Remix Reorder") } },
+                state = rememberTooltipState(),
+              ) {
+                FilledTonalIconButton(
+                  onClick = {
+                    coroutineScope.launch {
+                      val current = currentWindowIndex
+                      if (current in 0 until queueWindows.lastIndex) {
+                        val upcoming = queueWindows.subList(current + 1, queueWindows.size)
+                        val songIds = (listOf(queueWindows[current]) + upcoming).map { it.mediaItem.mediaId }
+                        val profiles = withContext(Dispatchers.IO) {
+                          try {
+                            database.trackProfileDao.getTrackProfiles(songIds)
+                              .associate { it.songId to it.toDomain() }
+                          } catch (e: Exception) {
+                            emptyMap()
+                          }
+                        }
+                        val reorderedUpcoming = AutoRemixOrderingEngine.chainTracks(
+                          anchor = profiles[queueWindows[current].mediaItem.mediaId],
+                          candidates = upcoming,
+                          profileProvider = { profiles[it.mediaItem.mediaId] },
+                        )
+                        for ((newIdx, item) in reorderedUpcoming.withIndex()) {
+                          val targetIndex = current + 1 + newIdx
+                          val fromIndex = queueWindows.indexOfFirst { it.mediaItem.mediaId == item.mediaItem.mediaId }
+                          if (fromIndex != -1 && fromIndex != targetIndex) {
+                            playerConnection.player.moveMediaItem(fromIndex, targetIndex)
+                          }
+                        }
+                        Toast.makeText(context, "Queue harmonically reordered", Toast.LENGTH_SHORT).show()
+                      }
+                    }
+                  },
+                  modifier = Modifier.size(36.dp)
+                ) {
+                  Icon(
+                    painter = painterResource(R.drawable.queue_music),
+                    contentDescription = "Auto-Remix Reorder",
+                    modifier = Modifier.size(20.dp)
+                  )
+                }
+              }
+
               TooltipBox(
                 positionProvider =
                   TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),

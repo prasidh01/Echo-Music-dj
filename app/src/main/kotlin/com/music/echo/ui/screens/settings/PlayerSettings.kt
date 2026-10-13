@@ -1,6 +1,7 @@
 package echo.music.iad1tya.ui.screens.settings
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.height
@@ -43,6 +44,12 @@ import echo.music.iad1tya.constants.AutoLoadMoreKey
 import echo.music.iad1tya.constants.AutoSkipNextOnErrorKey
 import echo.music.iad1tya.constants.AutomixCrossfadeKey
 import echo.music.iad1tya.constants.AutomixDebugOverlayKey
+import echo.music.iad1tya.constants.AutoDjEnabledKey
+import echo.music.iad1tya.constants.AutoDjPresetKey
+import echo.music.iad1tya.constants.AutoDjMaxTempoAdjustmentKey
+import echo.music.iad1tya.constants.AutoDjDebugKey
+import echo.music.iad1tya.constants.AutoDjAutoRemixOrderingKey
+import echo.music.domain.autodj.model.DjPreset
 import echo.music.iad1tya.constants.CrossfadeDurationKey
 import echo.music.iad1tya.constants.CrossfadeEnabledKey
 import echo.music.iad1tya.constants.CrossfadeGaplessKey
@@ -100,6 +107,17 @@ fun PlayerSettings(
     rememberPreference(AutomixCrossfadeKey, defaultValue = false)
   val (automixDebugOverlay, onAutomixDebugOverlayChange) =
     rememberPreference(AutomixDebugOverlayKey, defaultValue = false)
+  val (autoDjEnabled, onAutoDjEnabledChange) =
+    rememberPreference(AutoDjEnabledKey, defaultValue = automixCrossfade)
+  val (autoDjPreset, onAutoDjPresetChange) =
+    rememberEnumPreference(AutoDjPresetKey, defaultValue = DjPreset.SEAMLESS)
+  var showAutoDjPresetDialog by remember { mutableStateOf(false) }
+  val (autoDjMaxTempoAdjustment, onAutoDjMaxTempoAdjustmentChange) =
+    rememberPreference(AutoDjMaxTempoAdjustmentKey, defaultValue = 8f)
+  val (autoDjDebug, onAutoDjDebugChange) =
+    rememberPreference(AutoDjDebugKey, defaultValue = automixDebugOverlay)
+  val (autoDjAutoRemixOrdering, onAutoDjAutoRemixOrderingChange) =
+    rememberPreference(AutoDjAutoRemixOrderingKey, defaultValue = false)
   val (crossfadeGapless, onCrossfadeGaplessChange) =
     rememberPreference(CrossfadeGaplessKey, defaultValue = true)
   val (persistentQueue, onPersistentQueueChange) =
@@ -266,6 +284,31 @@ fun PlayerSettings(
             stringResource(R.string.loudness_preset_aggressive)
         }
       }
+    )
+  }
+
+  if (showAutoDjPresetDialog) {
+    EnumDialog(
+      onDismiss = { showAutoDjPresetDialog = false },
+      onSelect = {
+        onAutoDjPresetChange(it)
+        showAutoDjPresetDialog = false
+      },
+      title = "Auto DJ Preset",
+      current = autoDjPreset,
+      values =
+        listOf(
+          DjPreset.SEAMLESS,
+          DjPreset.CLUB,
+          DjPreset.CREATIVE,
+          DjPreset.CONSERVATIVE,
+          DjPreset.STANDARD,
+          DjPreset.AGGRESSIVE,
+          DjPreset.SMOOTH,
+          DjPreset.KEY_LOCK,
+          DjPreset.CUSTOM,
+        ),
+      valueText = { it.displayName }
     )
   }
 
@@ -588,16 +631,18 @@ fun PlayerSettings(
             )
           }
 
+          val isAutoDjActive = autoDjEnabled || automixCrossfade
           add(
             Material3SettingsItem(
               isHighlighted = highlightKey == stringResource(R.string.automix),
               icon = painterResource(R.drawable.graphic_eq),
-              title = { Text(stringResource(R.string.automix)) },
+              title = { Text("Auto DJ (Seamless Automix)") },
               description = { Text(stringResource(R.string.automix_desc)) },
               trailingContent = {
                 Switch(
-                  checked = automixCrossfade,
+                  checked = isAutoDjActive,
                   onCheckedChange = {
+                    onAutoDjEnabledChange(it)
                     onAutomixCrossfadeChange(it)
                     if (it) {
                       onCrossfadeEnabledChange(true)
@@ -609,7 +654,7 @@ fun PlayerSettings(
                     Icon(
                       painter =
                         painterResource(
-                          id = if (automixCrossfade) R.drawable.check else R.drawable.close
+                          id = if (isAutoDjActive) R.drawable.check else R.drawable.close
                         ),
                       contentDescription = null,
                       modifier = Modifier.size(SwitchDefaults.IconSize)
@@ -618,7 +663,8 @@ fun PlayerSettings(
                 )
               },
               onClick = {
-                val newValue = !automixCrossfade
+                val newValue = !isAutoDjActive
+                onAutoDjEnabledChange(newValue)
                 onAutomixCrossfadeChange(newValue)
                 if (newValue) {
                   onCrossfadeEnabledChange(true)
@@ -628,7 +674,63 @@ fun PlayerSettings(
               }
             )
           )
-          if (automixCrossfade) {
+          if (isAutoDjActive) {
+            add(
+              Material3SettingsItem(
+                isHighlighted = highlightKey == "Auto DJ Preset",
+                icon = painterResource(R.drawable.tune),
+                title = { Text("Auto DJ Preset") },
+                description = { Text(autoDjPreset.displayName) },
+                onClick = { showAutoDjPresetDialog = true }
+              )
+            )
+
+            add(
+              Material3SettingsItem(
+                isHighlighted = highlightKey == "Max Tempo Adjustment",
+                icon = painterResource(R.drawable.speed),
+                title = { Text("Max Tempo Adjustment") },
+                description = {
+                  Column {
+                    Text("${autoDjMaxTempoAdjustment.toInt()}%")
+                    Slider(
+                      value = autoDjMaxTempoAdjustment,
+                      onValueChange = onAutoDjMaxTempoAdjustmentChange,
+                      valueRange = 3f..15f,
+                      steps = 11,
+                      modifier = Modifier.fillMaxWidth()
+                    )
+                  }
+                }
+              )
+            )
+
+            add(
+              Material3SettingsItem(
+                isHighlighted = highlightKey == "Auto-Remix Queue Ordering",
+                icon = painterResource(R.drawable.queue_music),
+                title = { Text("Auto-Remix Queue Ordering") },
+                description = { Text("Harmonically chain upcoming recommended and queue tracks") },
+                trailingContent = {
+                  Switch(
+                    checked = autoDjAutoRemixOrdering,
+                    onCheckedChange = onAutoDjAutoRemixOrderingChange,
+                    thumbContent = {
+                      Icon(
+                        painter =
+                          painterResource(
+                            id = if (autoDjAutoRemixOrdering) R.drawable.check else R.drawable.close
+                          ),
+                        contentDescription = null,
+                        modifier = Modifier.size(SwitchDefaults.IconSize)
+                      )
+                    }
+                  )
+                },
+                onClick = { onAutoDjAutoRemixOrderingChange(!autoDjAutoRemixOrdering) }
+              )
+            )
+
             add(
               Material3SettingsItem(
                 isHighlighted = highlightKey == stringResource(R.string.automix_debug),
@@ -637,13 +739,16 @@ fun PlayerSettings(
                 description = { Text(stringResource(R.string.automix_debug_desc)) },
                 trailingContent = {
                   Switch(
-                    checked = automixDebugOverlay,
-                    onCheckedChange = onAutomixDebugOverlayChange,
+                    checked = autoDjDebug || automixDebugOverlay,
+                    onCheckedChange = {
+                      onAutoDjDebugChange(it)
+                      onAutomixDebugOverlayChange(it)
+                    },
                     thumbContent = {
                       Icon(
                         painter =
                           painterResource(
-                            id = if (automixDebugOverlay) R.drawable.check else R.drawable.close
+                            id = if (autoDjDebug || automixDebugOverlay) R.drawable.check else R.drawable.close
                           ),
                         contentDescription = null,
                         modifier = Modifier.size(SwitchDefaults.IconSize)
@@ -651,7 +756,11 @@ fun PlayerSettings(
                     }
                   )
                 },
-                onClick = { onAutomixDebugOverlayChange(!automixDebugOverlay) }
+                onClick = {
+                  val newVal = !(autoDjDebug || automixDebugOverlay)
+                  onAutoDjDebugChange(newVal)
+                  onAutomixDebugOverlayChange(newVal)
+                }
               )
             )
           }

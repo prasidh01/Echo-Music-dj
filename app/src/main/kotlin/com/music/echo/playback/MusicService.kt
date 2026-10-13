@@ -79,6 +79,15 @@ import echo.music.iad1tya.constants.AutoDownloadOnLikeKey
 import echo.music.iad1tya.constants.AutoLoadMoreKey
 import echo.music.iad1tya.constants.AutoSkipNextOnErrorKey
 import echo.music.iad1tya.constants.AutomixCrossfadeKey
+import echo.music.iad1tya.constants.AutoDjEnabledKey
+import echo.music.iad1tya.constants.AutoDjPresetKey
+import echo.music.iad1tya.constants.AutoDjMaxTempoAdjustmentKey
+import echo.music.iad1tya.constants.AutoDjDebugKey
+import echo.music.iad1tya.constants.AutoDjAutoRemixOrderingKey
+import echo.music.domain.autodj.model.CamelotKey
+import echo.music.domain.autodj.model.FallbackReason
+import echo.music.domain.autodj.model.TransitionType
+import echo.music.iad1tya.playback.autodj.AutoDjTelemetry
 import echo.music.iad1tya.constants.CrossfadeDurationKey
 import echo.music.iad1tya.constants.CrossfadeEnabledKey
 import echo.music.iad1tya.constants.CrossfadeGaplessKey
@@ -128,9 +137,14 @@ import echo.music.iad1tya.db.entities.Song
 import echo.music.iad1tya.di.DownloadCache
 import echo.music.iad1tya.di.PlayerCache
 import echo.music.iad1tya.echomusic.updater.downloadmanager.EchoNotificationProvider
+import echo.music.dsp.audio.AntiClippingLimiterAudioProcessor
 import echo.music.dsp.audio.AutomixDuckAudioProcessor
 import echo.music.dsp.audio.CustomEqualizerAudioProcessor
 import echo.music.dsp.audio.StereoWidenerAudioProcessor
+import echo.music.iad1tya.playback.autodj.AutoDjEvent
+import echo.music.iad1tya.playback.autodj.AutoDjState
+import echo.music.iad1tya.playback.autodj.AutoDjStateMachine
+import echo.music.iad1tya.playback.autodj.CancelReason
 import echo.music.dsp.controller.DspController
 import echo.music.dsp.data.EQProfileRepository
 import echo.music.iad1tya.playback.AudioSinkSelector
@@ -350,6 +364,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
   )
 
   val automixDebugInfo = MutableStateFlow<AutomixDebugInfo?>(null)
+  val autoDjTelemetry = MutableStateFlow(AutoDjTelemetry())
 
   private val secondaryPlayerListener =
     object : Player.Listener {
@@ -468,6 +483,10 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
   private val playerDuckProcessors = HashMap<Player, AutomixDuckAudioProcessor>()
   private val playerStereoWideners = HashMap<Player, StereoWidenerAudioProcessor>()
   private val playerEqProcessors = HashMap<Player, CustomEqualizerAudioProcessor>()
+  private val playerLimiterProcessors = HashMap<Player, AntiClippingLimiterAudioProcessor>()
+  val autoDjStateMachine = AutoDjStateMachine()
+  val limiterProcessors: Map<Player, AntiClippingLimiterAudioProcessor>
+    get() = playerLimiterProcessors
   private val cutoffGuard = PlaybackCutoffGuard()
 
   private val instantSilenceSkipEnabled = MutableStateFlow(false)
@@ -597,6 +616,82 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     playerInitialized.value = false
 
     scrobbleManager = ScrobbleManager(scope)
+
+    scope.launch {
+      autoDjStateMachine.state.collect { st ->
+        val current = autoDjTelemetry.value
+        when (st) {
+          is AutoDjState.Idle -> {
+            autoDjTelemetry.value = AutoDjTelemetry(state = "Idle", generationId = st.generationId, autoDjState = st)
+          }
+          is AutoDjState.Analyzing -> {
+            autoDjTelemetry.value = current.copy(state = "Analyzing", generationId = st.generationId, autoDjState = st)
+          }
+          is AutoDjState.Preparing -> {
+            autoDjTelemetry.value = current.copy(
+              state = "Preparing",
+              generationId = st.generationId,
+              outgoingBpm = st.outgoingProfile.bpm,
+              outgoingCamelotKey = st.outgoingProfile.camelotKey,
+              incomingBpm = st.incomingProfile?.bpm,
+              incomingCamelotKey = st.incomingProfile?.camelotKey,
+              autoDjState = st,
+            )
+          }
+          is AutoDjState.Planning -> {
+            autoDjTelemetry.value = current.copy(
+              state = "Planning",
+              generationId = st.generationId,
+              outgoingBpm = st.outgoingProfile.bpm,
+              outgoingCamelotKey = st.outgoingProfile.camelotKey,
+              incomingBpm = st.incomingProfile.bpm,
+              incomingCamelotKey = st.incomingProfile.camelotKey,
+              autoDjState = st,
+            )
+          }
+          is AutoDjState.Scheduled -> {
+            autoDjTelemetry.value = current.copy(
+              state = "Scheduled",
+              generationId = st.generationId,
+              tempoRatio = st.plan.tempoRatio,
+              harmonicScore = st.plan.harmonicScore,
+              transitionType = st.plan.transitionType,
+              fallbackReason = st.plan.fallbackReason,
+              confidence = st.plan.confidence,
+              autoDjState = st,
+            )
+          }
+          is AutoDjState.Mixing -> {
+            autoDjTelemetry.value = current.copy(
+              state = "Mixing",
+              generationId = st.generationId,
+              progress = st.progress,
+              tempoRatio = st.plan.tempoRatio,
+              harmonicScore = st.plan.harmonicScore,
+              transitionType = st.plan.transitionType,
+              fallbackReason = st.plan.fallbackReason,
+              confidence = st.plan.confidence,
+              autoDjState = st,
+            )
+          }
+          is AutoDjState.Handoff -> {
+            autoDjTelemetry.value = current.copy(
+              state = "Handoff",
+              generationId = st.generationId,
+              progress = 1.0f,
+              autoDjState = st,
+            )
+          }
+          is AutoDjState.Canceling -> {
+            autoDjTelemetry.value = current.copy(
+              state = "Canceling",
+              generationId = st.generationId,
+              autoDjState = st,
+            )
+          }
+        }
+      }
+    }
 
     scope.launch {
       dataStore.data
@@ -1082,7 +1177,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     dataStore.data
       .map {
         (try {
-          it[AutomixCrossfadeKey]
+          it[AutoDjEnabledKey] ?: it[AutomixCrossfadeKey]
         } catch (e: Exception) {
           null
         }) ?: false
@@ -1286,6 +1381,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     val silenceProcessor = SilenceDetectorAudioProcessor { handleLongSilenceDetected() }
 
     val stereoWidener = StereoWidenerAudioProcessor()
+    val limiterProcessor = AntiClippingLimiterAudioProcessor()
 
     runBlocking {
       val skipSilence = dataStore.get(SkipSilenceKey, false)
@@ -1298,7 +1394,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
       ExoPlayer.Builder(this)
         .setMediaSourceFactory(createMediaSourceFactory())
         .setRenderersFactory(
-          createRenderersFactory(eqProcessor, silenceProcessor, duckProcessor, stereoWidener)
+          createRenderersFactory(eqProcessor, silenceProcessor, duckProcessor, stereoWidener, limiterProcessor)
         )
         .setLoadControl(
           DefaultLoadControl.Builder()
@@ -1329,6 +1425,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     playerDuckProcessors[player] = duckProcessor
     playerStereoWideners[player] = stereoWidener
     playerEqProcessors[player] = eqProcessor
+    playerLimiterProcessors[player] = limiterProcessor
 
     player.apply {
       runBlocking {
@@ -1694,6 +1791,10 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
       }
     }
 
+    if (isCrossfading.value) {
+      cancelActiveTransition(CancelReason.QUEUE_MUTATION)
+    }
+
     queueGeneration++
     loadMoreJob?.cancel()
     loadMoreJob = null
@@ -1999,6 +2100,12 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     }
 
     if (upcomingIndices.isEmpty()) return null
+
+    if (isCrossfading.value) {
+      cancelActiveTransition(CancelReason.QUEUE_MUTATION)
+    } else {
+      releasePrebuffered()
+    }
 
     val removedItems = upcomingIndices.map { player.getMediaItemAt(it) }
 
@@ -2435,6 +2542,9 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     mediaItem: MediaItem?,
     reason: Int,
   ) {
+    if (isCrossfading.value && reason != Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+      cancelActiveTransition(CancelReason.USER_SKIP)
+    }
     cutoffGuard.onTrackChanged(mediaItem?.mediaId)
     val prevItem = trackedMediaItem
     if (prevItem != null) {
@@ -2649,6 +2759,9 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
   }
 
   override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+    if (!playWhenReady && isCrossfading.value) {
+      cancelActiveTransition(CancelReason.PAUSE)
+    }
 
     if (playWhenReady && castConnectionHandler?.isCasting?.value == true) {
       player.pause()
@@ -3736,6 +3849,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     silenceProcessor: SilenceDetectorAudioProcessor,
     duckProcessor: AutomixDuckAudioProcessor,
     stereoWidener: StereoWidenerAudioProcessor,
+    limiterProcessor: AntiClippingLimiterAudioProcessor,
   ) =
     object : DefaultRenderersFactory(this) {
       override fun buildAudioSink(
@@ -3753,6 +3867,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
                 duckProcessor,
                 silenceProcessor,
                 stereoWidener,
+                limiterProcessor,
               ),
               SilenceSkippingAudioProcessor(2_000_000, 20_000, 256),
               SonicAudioProcessor(),
@@ -4020,17 +4135,26 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       MusicWidgetReceiver.ACTION_PLAY_PAUSE -> {
-        if (player.isPlaying) player.pause() else player.play()
+        if (player.isPlaying) {
+          if (isCrossfading.value) {
+            cancelActiveTransition(CancelReason.PAUSE)
+          }
+          player.pause()
+        } else {
+          player.play()
+        }
         updateWidgetUI(player.isPlaying)
       }
       MusicWidgetReceiver.ACTION_LIKE -> {
         toggleLike()
       }
       MusicWidgetReceiver.ACTION_NEXT -> {
+        cancelActiveTransition(CancelReason.USER_SKIP)
         player.seekToNext()
         updateWidgetUI(player.isPlaying)
       }
       MusicWidgetReceiver.ACTION_PREVIOUS -> {
+        cancelActiveTransition(CancelReason.USER_SKIP)
         player.seekToPrevious()
         updateWidgetUI(player.isPlaying)
       }
@@ -4054,6 +4178,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
       MusicWidgetReceiver.ACTION_SKIP_TO_QUEUE_ITEM -> {
         val targetIndex = intent.getIntExtra(MusicWidgetReceiver.EXTRA_QUEUE_INDEX, -1)
         if (targetIndex in 0 until player.mediaItemCount) {
+          cancelActiveTransition(CancelReason.QUEUE_MUTATION)
           player.seekToDefaultPosition(targetIndex)
           if (!player.isPlaying) player.play()
           updateWidgetUI(true)
@@ -4219,6 +4344,11 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     reason: Int
   ) {
     if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+      if (isCrossfading.value) {
+        cancelActiveTransition(CancelReason.USER_SEEK)
+      } else {
+        autoDjStateMachine.cancel(CancelReason.USER_SEEK)
+      }
       prepareAutomixForCurrentPair()
       scheduleCrossfade()
     }
@@ -4241,6 +4371,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
   private fun prepareAutomixForCurrentPair() {
     if (!automixEnabled || !crossfadeEnabled || isCrossfading.value) return
     val pair = currentAutomixPair() ?: return
+    autoDjStateMachine.dispatchEvent(AutoDjEvent.TrackChanged(pair.currentId, pair.nextId))
     maybeAnalyzeBeat(pair.currentId, BeatAnalysisPriority.IMMEDIATE)
     if (pair.nextId != pair.currentId) {
       maybeAnalyzeBeat(pair.nextId, BeatAnalysisPriority.IMMEDIATE)
@@ -4281,6 +4412,19 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
             AutomixPlanResult(plan = null, pairAnalyzed = false)
           }
         val plan = planResult.plan
+        if (plan != null) {
+          val domainPlan = echo.music.domain.autodj.model.TransitionPlan(
+            outgoingSongId = plan.currentId,
+            incomingSongId = plan.nextId,
+            triggerTimeMs = plan.triggerTimeMs,
+            incomingStartMs = plan.incomingStartMs,
+            overlapDurationMs = plan.overlapMs,
+            tempoRatio = plan.tempoRatio,
+            pitchRatio = plan.pitchRatio,
+            generationId = autoDjStateMachine.generationId,
+          )
+          autoDjStateMachine.dispatchEvent(AutoDjEvent.PlanReady(autoDjStateMachine.generationId, domainPlan))
+        }
         if (automixEnabled && planResult.pairAnalyzed) analyzeUpcomingTracks()
         val triggerTime = plan?.triggerTimeMs ?: baseTriggerTime
         if (triggerTime - player.currentPosition <= 0) return@launch
@@ -4332,6 +4476,34 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     if (outBeat == null) maybeAnalyzeBeat(currentId, BeatAnalysisPriority.IMMEDIATE)
     if (inBeat == null && nextId != currentId)
       maybeAnalyzeBeat(nextId, BeatAnalysisPriority.IMMEDIATE)
+    val outPitch = outBeat?.keyPitchClass
+    val outMinor = outBeat?.keyIsMinor
+    val outKey = if (outPitch != null && outMinor != null) {
+      try { CamelotKey.fromPitchClass(outPitch, outMinor).code } catch (e: Exception) { null }
+    } else null
+    val inPitch = inBeat?.keyPitchClass
+    val inMinor = inBeat?.keyIsMinor
+    val inKey = if (inPitch != null && inMinor != null) {
+      try { CamelotKey.fromPitchClass(inPitch, inMinor).code } catch (e: Exception) { null }
+    } else null
+    val kOut = CamelotKey.parse(outKey)
+    val kIn = CamelotKey.parse(inKey)
+    val stepDelta = if (kOut != null && kIn != null) {
+      val forward = ((kIn.number - kOut.number) % 12 + 12) % 12
+      if (forward <= 6) forward else forward - 12
+    } else 0
+    val harmScore = if (kOut != null && kIn != null) kOut.harmonicCompatibilityScore(kIn) else 0.5f
+
+    autoDjTelemetry.value = autoDjTelemetry.value.copy(
+      outgoingBpm = outBeat?.bpm,
+      incomingBpm = inBeat?.bpm,
+      outgoingCamelotKey = outKey,
+      incomingCamelotKey = inKey,
+      stepDelta = stepDelta,
+      harmonicScore = harmScore,
+      confidence = minOf(outBeat?.confidence ?: 1f, inBeat?.confidence ?: 1f),
+    )
+
     val partialDebug =
       AutomixDebugInfo(
         status = "",
@@ -4476,6 +4648,11 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
         incomingStartMs = plan.incomingStartMs,
         tempoRatio = plan.tempoRatio,
       )
+    autoDjTelemetry.value = autoDjTelemetry.value.copy(
+      tempoRatio = plan.tempoRatio,
+      transitionType = TransitionType.PHRASE_ALIGNED_BLEND,
+      fallbackReason = FallbackReason.NONE,
+    )
     return AutomixPlanResult(plan = plan, pairAnalyzed = true)
   }
 
@@ -4648,6 +4825,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     playerDuckProcessors.remove(pb.player)
     playerSilenceProcessors.remove(pb.player)
     playerStereoWideners.remove(pb.player)
+    playerLimiterProcessors.remove(pb.player)
     playerEqProcessors.remove(pb.player)?.let { dspController.removeAudioProcessor(it) }
     try {
       pb.player.removeListener(secondaryPlayerListener)
@@ -4709,7 +4887,9 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
         } catch (e: Exception) {
           PlaybackParameters.DEFAULT
         }
-      if (base != PlaybackParameters.DEFAULT) secPlayer.playbackParameters = base
+      val effectiveSpeed = (base.speed * plan.tempoRatio).coerceIn(0.5f, 2.0f)
+      val effectivePitch = (base.pitch * plan.pitchRatio).coerceIn(0.5f, 2.0f)
+      secPlayer.playbackParameters = PlaybackParameters(effectiveSpeed, effectivePitch)
     }
     secPlayer.volume = 0f
     secPlayer.repeatMode = savedRepeatMode
@@ -4717,6 +4897,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     secPlayer.prepare() // playWhenReady left false: buffers ahead without playing.
 
     prebuffered = PrebufferedTransition(secPlayer, plan, targetMediaId, startTime)
+    autoDjStateMachine.dispatchEvent(AutoDjEvent.PlayerPrepared(autoDjStateMachine.generationId))
   }
 
   private fun startCrossfade(plan: AutomixPlan? = null) {
@@ -4766,7 +4947,9 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
           } catch (e: Exception) {
             PlaybackParameters.DEFAULT
           }
-        if (base != PlaybackParameters.DEFAULT) secPlayer.playbackParameters = base
+        val effectiveSpeed = (base.speed * plan.tempoRatio).coerceIn(0.5f, 2.0f)
+        val effectivePitch = (base.pitch * plan.pitchRatio).coerceIn(0.5f, 2.0f)
+        secPlayer.playbackParameters = PlaybackParameters(effectiveSpeed, effectivePitch)
       }
       secPlayer.volume = 0f
       secPlayer.repeatMode = savedRepeatMode
@@ -4790,6 +4973,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     isAutomixing.value = activeAutomixPlan != null
     if (activeAutomixPlan != null) {
       automixDebugInfo.value = automixDebugInfo.value?.copy(status = "automixing now")
+      autoDjStateMachine.dispatchEvent(AutoDjEvent.MixTriggered(autoDjStateMachine.generationId))
     }
     val nextPlayer = secondaryPlayer ?: return
     val currentPlayer = player
@@ -4901,6 +5085,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
       setupLoudnessEnhancer()
     }
 
+    val jobGen = autoDjStateMachine.generationId
     crossfadeJob =
       scope.launch {
         val djPlan = activeAutomixPlan
@@ -4936,11 +5121,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
 
         try {
           for (i in 0..steps) {
-            if (!isActive) break
-
-            while (!player.playWhenReady && isActive) {
-              delay(100)
-            }
+            if (!isActive || autoDjStateMachine.generationId != jobGen) break
 
             if (
               fadingPlayer?.playbackState == androidx.media3.common.Player.STATE_ENDED ||
@@ -4951,6 +5132,7 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
             }
 
             val progress = (i / steps.toFloat()).coerceIn(0f, 1f)
+            autoDjStateMachine.dispatchEvent(AutoDjEvent.MixProgress(jobGen, progress))
             val gains = echo.music.iad1tya.playback.crossfade.EqualPowerCurve.calculateGains(progress)
 
             try {
@@ -4968,6 +5150,9 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
             }
 
             delay(stepTime)
+          }
+          if (isActive && autoDjStateMachine.generationId == jobGen) {
+            autoDjStateMachine.dispatchEvent(AutoDjEvent.MixCompleted(jobGen))
           }
         } finally {
           try {
@@ -4994,14 +5179,71 @@ class MusicService : MediaLibraryService(), Player.Listener, PlaybackStatsListen
     }
     fadingPlayer?.let { playerDuckProcessors.remove(it) }
     fadingPlayer?.let { playerStereoWideners.remove(it) }
+    fadingPlayer?.let { playerLimiterProcessors.remove(it) }
+    fadingPlayer?.let { playerSilenceProcessors.remove(it) }
     fadingPlayer?.let { playerEqProcessors.remove(it)?.let { eq -> dspController.removeAudioProcessor(eq) } }
     fadingPlayer?.stop()
     fadingPlayer?.clearMediaItems()
     fadingPlayer?.release()
     fadingPlayer = null
+    try {
+      player.playbackParameters = PlaybackParameters.DEFAULT
+    } catch (e: Exception) {
+      Timber.tag(TAG).d(e, "Failed to reset playbackParameters")
+    }
     isCrossfading.value = false
     isAutomixing.value = false
+    if (autoDjStateMachine.currentState is AutoDjState.Handoff) {
+      autoDjStateMachine.dispatchEvent(AutoDjEvent.Reset)
+    }
     sleepTimer.notifySongTransition()
+  }
+
+  fun cancelActiveTransition(reason: CancelReason = CancelReason.USER_SKIP) {
+    Timber.tag(TAG).d("cancelActiveTransition: %s (genId=%d)", reason, autoDjStateMachine.generationId)
+
+    // 1. Advance generation ID & move to Canceling
+    autoDjStateMachine.dispatchEvent(AutoDjEvent.CancelRequested(reason))
+
+    // 2. Cancel in-flight jobs
+    crossfadeJob?.cancel()
+    crossfadeJob = null
+    crossfadeTriggerJob?.cancel()
+    crossfadeTriggerJob = null
+
+    // 3. Reset primary player volume and ducking immediately
+    try {
+      player.volume = 1.0f
+    } catch (e: Exception) {
+      Timber.tag(TAG).e(e, "Error resetting player volume in cancelActiveTransition")
+    }
+    playerDuckProcessors[player]?.resetGain()
+
+    // 4. Clean up fading player
+    val oldFading = fadingPlayer
+    if (oldFading != null) {
+      try {
+        oldFading.volume = 0.0f
+        playerDuckProcessors[oldFading]?.resetGain()
+        cleanupCrossfade()
+      } catch (e: Exception) {
+        Timber.tag(TAG).e(e, "Error cleaning up fadingPlayer in cancelActiveTransition")
+      }
+    }
+
+    // 5. Release standby player
+    releasePrebuffered()
+
+    // 6. Reset flags and return to Idle
+    isCrossfading.value = false
+    isAutomixing.value = false
+    activeAutomixPlan = null
+    automixDebugInfo.value = null
+    autoDjStateMachine.dispatchEvent(AutoDjEvent.Reset)
+  }
+
+  fun cancelActiveTransition(reason: String) {
+    cancelActiveTransition(CancelReason.fromString(reason))
   }
 
   companion object {

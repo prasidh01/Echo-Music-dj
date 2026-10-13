@@ -5,6 +5,10 @@ import echo.music.iad1tya.constants.LastFMUsernameKey
 import echo.music.iad1tya.db.entities.RecommendationExclusionEntity
 import echo.music.iad1tya.db.entities.SongPlayStatsEntity
 import kotlinx.coroutines.test.runTest
+import com.music.innertube.models.SongItem
+import echo.music.domain.autodj.model.CamelotKey
+import echo.music.domain.autodj.model.TrackProfile
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -144,5 +148,31 @@ class RecommendationEngineTest {
     assertTrue("Generation should succeed even when Last.fm fails", result.isSuccess)
     val playlistId = result.getOrNull()
     assertTrue("PlaylistId should start with local_taste_", playlistId?.startsWith("local_taste_") == true)
+  }
+
+  @Test
+  fun testRankAndChainForAutoDj() {
+    val track1 = SongItem(id = "track_1", title = "Track 1", artists = emptyList(), thumbnail = "")
+    val track2 = SongItem(id = "track_2", title = "Track 2", artists = emptyList(), thumbnail = "")
+    val track3 = SongItem(id = "track_3", title = "Track 3", artists = emptyList(), thumbnail = "")
+
+    val profile1 = TrackProfile(songId = "track_1", bpm = 120f, camelotKey = "8B")
+    val profile2 = TrackProfile(songId = "track_2", bpm = 160f, camelotKey = "2A")
+    val profile3 = TrackProfile(songId = "track_3", bpm = 122f, camelotKey = "8B")
+
+    val profiles = mapOf(
+      "track_1" to profile1,
+      "track_2" to profile2,
+      "track_3" to profile3,
+    )
+
+    val ranked = engine.rankForAutoDj(listOf(track2, track3), anchor = profile1, profiles = profiles)
+    assertEquals("track_3", ranked.first().id)
+
+    val chained = engine.chainForAutoDj(listOf(track1, track2, track3), anchor = profile1, profiles = profiles)
+    assertEquals(3, chained.size)
+    assertEquals("track_1", chained[0].id)
+    assertEquals("track_3", chained[1].id)
+    assertEquals("track_2", chained[2].id)
   }
 }

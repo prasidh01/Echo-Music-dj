@@ -46,6 +46,7 @@ import echo.music.iad1tya.db.entities.SongAlbumMap
 import echo.music.iad1tya.db.entities.SongArtistMap
 import echo.music.iad1tya.db.entities.SongEntity
 import echo.music.iad1tya.db.entities.SongWithStats
+import echo.music.iad1tya.db.entities.TrackProfileEntity
 import echo.music.iad1tya.extensions.reversed
 import echo.music.iad1tya.extensions.toSQLiteQuery
 import echo.music.iad1tya.models.MediaMetadata
@@ -1685,6 +1686,14 @@ interface DatabaseDao {
 
   @Query("SELECT * FROM beat_info WHERE songId = :songId")
   fun beatInfo(songId: String): BeatInfoEntity?
+
+  @Upsert fun upsert(trackProfile: TrackProfileEntity)
+
+  @Query("SELECT * FROM track_profile WHERE songId = :songId")
+  fun trackProfile(songId: String): Flow<TrackProfileEntity?>
+
+  @Query("SELECT * FROM track_profile WHERE songId = :songId LIMIT 1")
+  suspend fun getTrackProfile(songId: String): TrackProfileEntity?
 
   @Upsert fun upsert(song: SongEntity)
 

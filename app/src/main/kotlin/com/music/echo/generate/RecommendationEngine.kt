@@ -12,6 +12,14 @@ import echo.music.iad1tya.db.entities.SongEntity
 import echo.music.iad1tya.db.entities.SongPlayStatsEntity
 import echo.music.iad1tya.utils.lastfm.LastFmTasteApi
 import javax.inject.Inject
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
+import echo.music.domain.autodj.model.TrackProfile
+import echo.music.domain.autodj.reorder.AutoRemixOrderingEngine
+import echo.music.iad1tya.constants.AutoDjAutoRemixOrderingKey
+import echo.music.iad1tya.db.entities.toDomain
+import echo.music.iad1tya.utils.dataStore
+import echo.music.iad1tya.utils.get
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -48,8 +56,10 @@ open class RecommendationEngine @Inject constructor(
   private val lastFmTasteApi: LastFmTasteApi,
   private val genresRepository: GenresRepository? = null,
   private val database: MusicDatabase? = null,
+  @ApplicationContext private val context: Context? = null,
 ) : LocalTasteEngine(songPlayStatsDao, recommendationExclusionDao, database) {
   var allowNullDatabaseForTesting: Boolean = false
+  var autoRemixOrderingEnabled: Boolean? = null
 
   override suspend fun generate(count: Int): Result<String> = withContext(Dispatchers.IO) {
     try {
@@ -282,7 +292,25 @@ open class RecommendationEngine @Inject constructor(
         return@withContext Result.failure(IllegalStateException("Database not available to persist playlist"))
       }
 
-      persistPlaylist(playlistId, playlistName, finalSongs)
+      val shouldAutoRemix = autoRemixOrderingEnabled ?: (context?.dataStore?.get(AutoDjAutoRemixOrderingKey, false) ?: false)
+      val orderedSongs = if (shouldAutoRemix && database != null) {
+        val songIds = finalSongs.map { it.id }
+        val profiles = try {
+          database.trackProfileDao.getTrackProfiles(songIds)
+            .associate { it.songId to it.toDomain() }
+        } catch (e: Exception) {
+          emptyMap()
+        }
+        if (profiles.isNotEmpty()) {
+          chainForAutoDj(finalSongs, profiles = profiles)
+        } else {
+          finalSongs
+        }
+      } else {
+        finalSongs
+      }
+
+      persistPlaylist(playlistId, playlistName, orderedSongs)
 
       Result.success(playlistId)
     } catch (e: Exception) {
@@ -290,5 +318,33 @@ open class RecommendationEngine @Inject constructor(
       Timber.e(e, "RecommendationEngine generation failed, attempting local fallback")
       super.generate(count)
     }
+  }
+
+  fun rankForAutoDj(
+    tracks: List<SongItem>,
+    anchor: TrackProfile? = null,
+    profiles: Map<String, TrackProfile> = emptyMap(),
+  ): List<SongItem> {
+    if (tracks.size <= 1) return tracks
+    val effectiveAnchor = anchor ?: profiles[tracks.first().id]
+    return AutoRemixOrderingEngine.rankCandidates(
+      anchor = effectiveAnchor,
+      candidates = tracks,
+      profileProvider = { profiles[it.id] },
+    )
+  }
+
+  fun chainForAutoDj(
+    tracks: List<SongItem>,
+    anchor: TrackProfile? = null,
+    profiles: Map<String, TrackProfile> = emptyMap(),
+  ): List<SongItem> {
+    if (tracks.size <= 1) return tracks
+    val effectiveAnchor = anchor ?: profiles[tracks.first().id]
+    return AutoRemixOrderingEngine.chainTracks(
+      anchor = effectiveAnchor,
+      candidates = tracks,
+      profileProvider = { profiles[it.id] },
+    )
   }
 }

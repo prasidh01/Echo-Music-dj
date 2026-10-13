@@ -24,8 +24,8 @@ import kotlin.math.sqrt
  */
 @UnstableApi
 class AutomixDuckAudioProcessor(
-  private val shelfFrequencyHz: Double = 150.0,
-  private val maxDuckDb: Double = -10.0,
+  val shelfFrequencyHz: Double = 150.0,
+  val maxDuckDb: Double = -10.0,
 ) : AudioProcessor {
 
   private var sampleRate = 0
@@ -73,6 +73,9 @@ class AutomixDuckAudioProcessor(
   fun resetGain() {
     targetMix = 0f
   }
+
+  fun getTargetMix(): Float = targetMix
+  fun getCurrentMix(): Float = currentMix
 
   private fun computeShelfCoefficients() {
     val aVal = sqrt(10.0.pow(maxDuckDb / 20.0))
@@ -184,7 +187,7 @@ class AutomixDuckAudioProcessor(
     return buffer
   }
 
-  override fun isEnded(): Boolean = inputEnded && outputBuffer.remaining() == 0
+  override fun isEnded(): Boolean = inputEnded && outputBuffer === EMPTY_BUFFER
 
   @Deprecated("Deprecated in Java")
   override fun flush() {

@@ -167,6 +167,8 @@ class PlayerConnection(
   val isAutomixing: kotlinx.coroutines.flow.StateFlow<Boolean> = service.isAutomixing
   val automixDebugInfo: kotlinx.coroutines.flow.StateFlow<MusicService.AutomixDebugInfo?> =
     service.automixDebugInfo
+  val telemetryState: kotlinx.coroutines.flow.StateFlow<echo.music.iad1tya.playback.autodj.AutoDjTelemetry> =
+    service.autoDjTelemetry
 
   var shouldBlockPlaybackChanges: (() -> Boolean)? = null
 
